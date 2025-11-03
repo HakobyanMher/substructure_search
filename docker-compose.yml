@@ -1,0 +1,90 @@
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: molecule_user
+      POSTGRES_PASSWORD: molecule_pass
+      POSTGRES_DB: molecule_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U molecule_user -d molecule_db"] 
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+
+  web1:
+    build: .
+    volumes:
+      - ./src:/app/src
+    environment:
+      SERVER_ID: SERVER-1
+      DATABASE_URL: postgresql://molecule_user:molecule_pass@db:5432/molecule_db
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - app-network
+
+  web2:
+    build: .
+    volumes:
+      - ./src:/app/src
+    environment:
+      SERVER_ID: SERVER-2
+      DATABASE_URL: postgresql://molecule_user:molecule_pass@db:5432/molecule_db
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - app-network
+
+  nginx:
+    image: nginx:latest
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx:/etc/nginx/conf.d
+    depends_on:
+      - web1
+      - web2
+    networks:
+      - app-network
+
+  celery_worker:
+    build: .
+    command: celery -A src.celery_app:celery_app worker --loglevel=info
+    volumes:
+      - ./src:/app/src
+    environment:
+      DATABASE_URL: postgresql://molecule_user:molecule_pass@db:5432/molecule_db
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
